@@ -1,4 +1,8 @@
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
+
+// AI_PROVIDER: 'groq' (free tier, default) or 'anthropic' (set as a var in wrangler.toml
+// once you're ready to move — no code change needed, just flip the var + secret).
+const GROQ_MODEL = 'llama-3.3-70b-versatile'
 const ANTHROPIC_MODEL = 'claude-sonnet-5'
 
 function cors(env) {
@@ -45,9 +49,44 @@ export default {
   },
 }
 
-// ---------- Anthropic helper ----------
+// ---------- LLM helper (Groq by default, Anthropic as a drop-in swap later) ----------
 
-async function callClaude(env, { system, prompt, maxTokens = 1500 }) {
+async function callLLM(env, { system, prompt, maxTokens = 1500, json: wantJson = true }) {
+  const provider = (env.AI_PROVIDER || 'groq').toLowerCase()
+  if (provider === 'anthropic') return callAnthropic(env, { system, prompt, maxTokens })
+  return callGroq(env, { system, prompt, maxTokens, wantJson })
+}
+
+async function callGroq(env, { system, prompt, maxTokens, wantJson }) {
+  if (!env.GROQ_API_KEY) {
+    throw new Error('Server is missing GROQ_API_KEY. Set it with `wrangler secret put GROQ_API_KEY` (free key from console.groq.com).')
+  }
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
+      ...(wantJson ? { response_format: { type: 'json_object' } } : {}),
+    }),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Groq API error (${res.status}): ${text.slice(0, 400)}`)
+  }
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || ''
+}
+
+async function callAnthropic(env, { system, prompt, maxTokens }) {
   if (!env.ANTHROPIC_API_KEY) {
     throw new Error('Server is missing ANTHROPIC_API_KEY. Set it with `wrangler secret put ANTHROPIC_API_KEY`.')
   }
@@ -106,7 +145,7 @@ Rules:
 Research type: ${type || 'General Medical Research'}
 Research depth: ${depth || 'standard'}`
 
-  const raw = await callClaude(env, { system, prompt, maxTokens: 1200 })
+  const raw = await callLLM(env, { system, prompt, maxTokens: 1200 })
   const plan = extractJson(raw)
   if (!plan.investigationAreas) plan.investigationAreas = []
   return plan
@@ -287,7 +326,7 @@ Research type: ${type || 'General Medical Research'}
 Supplied papers (JSON):
 ${JSON.stringify(trimmed, null, 2)}`
 
-  const raw = await callClaude(env, { system, prompt, maxTokens: 4000 })
+  const raw = await callLLM(env, { system, prompt, maxTokens: 4000 })
   const synthesis = extractJson(raw)
   return synthesis
 }

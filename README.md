@@ -40,9 +40,10 @@ These are Phase 2/3 in the original brief — happy to build any of them next.
   - `POST /api/search` — live PubMed E-utilities search + abstract fetch
   - `POST /api/synthesize` — Claude synthesizes evidence, grounded in the
     fetched abstracts only
-- **AI**: Anthropic API (your own API key, set as a Worker secret — this is a
-  standalone deployment, not run inside claude.ai, so it needs a real key from
-  console.anthropic.com).
+- **AI**: Groq API by default (free tier, `llama-3.3-70b-versatile`) — your
+  own key from console.groq.com, set as a Worker secret. Swap to Anthropic
+  later by setting `AI_PROVIDER = "anthropic"` in `wrangler.toml` and adding
+  the `ANTHROPIC_API_KEY` secret instead — no code changes needed.
 
 ## Local dev
 
@@ -64,7 +65,9 @@ the dev frontend at the local worker.
 ## Environment variables / secrets
 
 Worker:
-- `ANTHROPIC_API_KEY` (secret) — from console.anthropic.com
+- `GROQ_API_KEY` (secret) — free key from console.groq.com
+- `ANTHROPIC_API_KEY` (secret, optional) — only needed if `AI_PROVIDER = "anthropic"`
+- `AI_PROVIDER` (var, in `wrangler.toml`) — `"groq"` (default) or `"anthropic"`
 - `CORS_ORIGIN` (var, in `wrangler.toml`) — set to your Pages domain
 
 Frontend (Cloudflare Pages dashboard → Settings → Environment variables):

@@ -4,6 +4,13 @@ compatibility_date = "2024-09-01"
 
 [vars]
 CORS_ORIGIN = "https://femtolens.acadapp.in"
+AI_PROVIDER = "groq"
+# When you're ready to move to Anthropic, change the line above to:
+#   AI_PROVIDER = "anthropic"
+# and set the ANTHROPIC_API_KEY secret instead of GROQ_API_KEY — no code change needed.
 
-# ANTHROPIC_API_KEY is a secret, not a var — set it with:
+# API keys are secrets, never vars — set with one of:
+#   wrangler secret put GROQ_API_KEY
 #   wrangler secret put ANTHROPIC_API_KEY
+
+account_id = "ab2ac3186ce21fac97dff24ea4ff13fe"
