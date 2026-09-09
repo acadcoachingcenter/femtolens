@@ -2,7 +2,7 @@ const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
 
 // AI_PROVIDER: 'groq' (free tier, default) or 'anthropic' (set as a var in wrangler.toml
 // once you're ready to move — no code change needed, just flip the var + secret).
-const GROQ_MODEL = 'llama-3.3-70b-versatile'
+const GROQ_MODEL = 'openai/gpt-oss-120b'
 const ANTHROPIC_MODEL = 'claude-sonnet-5'
 
 function cors(env) {
@@ -75,6 +75,9 @@ async function callGroq(env, { system, prompt, maxTokens, wantJson }) {
         { role: 'system', content: system },
         { role: 'user', content: prompt },
       ],
+      // gpt-oss is a reasoning model; keep its reasoning trace out of the
+      // returned content so `content` is clean JSON, not chain-of-thought.
+      reasoning_format: 'hidden',
       ...(wantJson ? { response_format: { type: 'json_object' } } : {}),
     }),
   })
