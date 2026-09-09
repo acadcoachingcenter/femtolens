@@ -6,7 +6,7 @@ import { api } from '../lib/api.js'
 
 const DEPTH_LIMIT = { quick: 6, standard: 12, deep: 20, comprehensive: 28 }
 
-export default function LiveWorkspace({ question, type, depth, areas, onComplete, onOpenPaper }) {
+export default function LiveWorkspace({ question, type, depth, areas, token, onComplete, onOpenPaper }) {
   const [doneKeys, setDoneKeys] = useState(['question'])
   const [currentKey, setCurrentKey] = useState('search')
   const [log, setLog] = useState([{ title: 'Question formulation', body: `Locked research question and ${areas.length} investigation areas.` }])
@@ -30,7 +30,7 @@ export default function LiveWorkspace({ question, type, depth, areas, onComplete
       setCurrentKey('search')
       pushLog('Searching biomedical literature', 'Querying PubMed and Europe PMC for relevant studies…')
       const limit = DEPTH_LIMIT[depth] || 12
-      const searchRes = await api.search({ question, type, areas, limit })
+      const searchRes = await api.search({ question, type, areas, depth, limit }, token)
       setPapers(searchRes.papers || [])
       setSearchMeta(searchRes.meta || null)
       pushLog(
@@ -65,7 +65,7 @@ export default function LiveWorkspace({ question, type, depth, areas, onComplete
       // 5. Synthesis (real call)
       setCurrentKey('synthesis')
       pushLog('Evidence synthesis', `Comparing findings across ${searchRes.papers.length} studies and checking for disagreement…`)
-      const synth = await api.synthesize({ question, type, papers: searchRes.papers })
+      const synth = await api.synthesize({ question, type, papers: searchRes.papers }, token)
       setDoneKeys((d) => [...d, 'synthesis'])
 
       // 6. Report

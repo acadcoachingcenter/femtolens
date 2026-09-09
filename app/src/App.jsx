@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Landing from './components/Landing.jsx'
 import Dashboard from './components/Dashboard.jsx'
+import { AuthProvider } from './lib/auth.jsx'
 
 export default function App() {
   const [view, setView] = useState('landing')
@@ -11,8 +12,13 @@ export default function App() {
     setView('dashboard')
   }
 
-  if (view === 'dashboard') {
-    return <Dashboard initialQuestion={seedQuestion} onExit={() => setView('landing')} />
-  }
-  return <Landing onStart={start} />
+  return (
+    <AuthProvider>
+      {view === 'dashboard' ? (
+        <Dashboard initialQuestion={seedQuestion} onExit={() => setView('landing')} />
+      ) : (
+        <Landing onStart={start} />
+      )}
+    </AuthProvider>
+  )
 }

@@ -6,12 +6,18 @@ import LiveWorkspace from './LiveWorkspace.jsx'
 import ReportView from './ReportView.jsx'
 import PaperModal from './PaperModal.jsx'
 import PlaceholderPanel from './PlaceholderPanel.jsx'
-import { Menu, ArrowLeft } from 'lucide-react'
+import GoogleSignInButton from './GoogleSignInButton.jsx'
+import PricingCards from './PricingCards.jsx'
+import UsageGauge from './UsageGauge.jsx'
+import { Menu, ArrowLeft, LogOut } from 'lucide-react'
 import { api } from '../lib/api.js'
+import { depthAllowed } from '../lib/tiers.js'
+import { useAuth } from '../lib/auth.jsx'
 import LensMark, { Wordmark } from './LensMark.jsx'
 
 export default function Dashboard({ initialQuestion, onExit }) {
-  const [stage, setStage] = useState('form') // form | planning | plan | workspace | report | placeholder
+  const { user, subscription, token, signOut, refresh } = useAuth()
+  const [stage, setStage] = useState('form') // form | planning | plan | signin-required | upgrade-required | workspace | report | placeholder
   const [navKey, setNavKey] = useState('new')
   const [form, setForm] = useState(null)
   const [plan, setPlan] = useState(null)
@@ -19,6 +25,8 @@ export default function Dashboard({ initialQuestion, onExit }) {
   const [result, setResult] = useState(null)
   const [openPaper, setOpenPaper] = useState(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [gaugeKey, setGaugeKey] = useState(0)
+  const [upgradeReason, setUpgradeReason] = useState('')
 
   const goNew = () => {
     setStage('form')
@@ -49,18 +57,38 @@ export default function Dashboard({ initialQuestion, onExit }) {
     }
   }
 
-  const handleBegin = (areas) => {
+  const handleBegin = async (editedAreas) => {
+    if (editedAreas && plan) setPlan({ ...plan, investigationAreas: editedAreas })
+    if (!token || !user) {
+      setStage('signin-required')
+      return
+    }
+    // Refresh subscription in case it changed since sign-in, then gate client-side
+    // (server re-checks regardless — this just avoids a pointless round trip).
+    await refresh(token)
+    if (subscription && !depthAllowed(subscription.maxDepth, form.depth)) {
+      setUpgradeReason(`Your ${subscription.label} plan supports up to "${subscription.maxDepth}" depth. Choose a lower depth or upgrade.`)
+      setStage('upgrade-required')
+      return
+    }
+    if (subscription && subscription.runsUsed >= subscription.runsLimit) {
+      setUpgradeReason(`You've used all ${subscription.runsLimit} research runs on your ${subscription.label} plan this period. Upgrade for more, or wait for your period to reset.`)
+      setStage('upgrade-required')
+      return
+    }
     setStage('workspace')
   }
 
   const handleWorkspaceComplete = (res) => {
     setResult(res)
     setStage('report')
+    setGaugeKey((k) => k + 1)
+    refresh(token)
   }
 
   return (
     <div className="flex min-h-screen bg-ink-950">
-      <Sidebar activeKey={navKey} onNavigate={handleNavigate} onLogoClick={onExit} />
+      <Sidebar activeKey={navKey} onNavigate={handleNavigate} onLogoClick={onExit} user={user} subscription={subscription} />
 
       <div className="flex min-h-screen flex-1 flex-col">
         <div className="flex items-center justify-between border-b border-ink-700/60 px-4 py-3 lg:hidden">
@@ -75,6 +103,7 @@ export default function Dashboard({ initialQuestion, onExit }) {
         {mobileNavOpen && (
           <div className="border-b border-ink-700/60 px-4 py-3 lg:hidden">
             <button onClick={() => handleNavigate('new')} className="focus-ring text-sm text-lens-400">+ New Research</button>
+            <button onClick={() => handleNavigate('plans')} className="focus-ring ml-4 text-sm text-paper-50/70">Plans &amp; Usage</button>
           </div>
         )}
 
@@ -99,12 +128,41 @@ export default function Dashboard({ initialQuestion, onExit }) {
             />
           )}
 
+          {stage === 'signin-required' && (
+            <div className="mx-auto max-w-md px-6 py-24 text-center">
+              <h2 className="font-serif text-xl text-paper-50">Sign in to run this research</h2>
+              <p className="mt-2 text-sm text-paper-50/55">
+                Exploring plans is free. Running the literature search and evidence synthesis needs an account
+                so we can track your plan's monthly research runs.
+              </p>
+              <div className="mt-6 flex justify-center">
+                <GoogleSignInButton onSuccess={handleBegin} />
+              </div>
+              <button onClick={() => setStage('plan')} className="focus-ring mt-5 text-xs text-paper-50/40 hover:text-paper-50">
+                Back to plan
+              </button>
+            </div>
+          )}
+
+          {stage === 'upgrade-required' && (
+            <div className="mx-auto max-w-3xl px-6 py-12">
+              <h2 className="font-serif text-2xl text-paper-50">Upgrade to continue</h2>
+              <div className="mt-6">
+                <PricingCards currentTier={subscription?.tier} reason={upgradeReason} />
+              </div>
+              <button onClick={() => setStage('plan')} className="focus-ring mt-6 text-xs text-paper-50/40 hover:text-paper-50">
+                Back to plan
+              </button>
+            </div>
+          )}
+
           {stage === 'workspace' && form && (
             <LiveWorkspace
               question={form.question}
               type={form.type}
               depth={form.depth}
               areas={plan?.investigationAreas || []}
+              token={token}
               onComplete={handleWorkspaceComplete}
               onOpenPaper={setOpenPaper}
             />
@@ -120,7 +178,48 @@ export default function Dashboard({ initialQuestion, onExit }) {
             />
           )}
 
-          {stage === 'placeholder' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
+          {stage === 'placeholder' && navKey !== 'plans' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
+
+          {stage === 'placeholder' && navKey === 'plans' && (
+            <div className="mx-auto max-w-3xl px-6 py-12">
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-lens-400/80">Account</p>
+              <h1 className="mt-3 font-serif text-2xl text-paper-50">Plans &amp; Usage</h1>
+
+              {user ? (
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-ink-600 bg-ink-900/40 p-4">
+                  <div className="flex items-center gap-3">
+                    {user.picture && <img src={user.picture} alt="" className="h-10 w-10 rounded-full" referrerPolicy="no-referrer" />}
+                    <div>
+                      <p className="text-sm font-medium text-paper-50">{user.name || user.email}</p>
+                      <p className="text-xs text-paper-50/50">{user.email}</p>
+                    </div>
+                  </div>
+                  <button onClick={signOut} className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-ink-600 px-3 py-1.5 text-xs text-paper-50/70 hover:border-signal-coral/50 hover:text-signal-coral">
+                    <LogOut size={13} /> Sign out
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-6 rounded-lg border border-ink-600 bg-ink-900/40 p-5 text-center">
+                  <p className="mb-3 text-sm text-paper-50/60">Sign in to see your plan and research run usage.</p>
+                  <div className="flex justify-center"><GoogleSignInButton /></div>
+                </div>
+              )}
+
+              {subscription && (
+                <p className="mt-4 text-xs text-paper-50/50">
+                  {subscription.runsUsed} / {subscription.runsLimit} research runs used this period · resets {new Date(subscription.periodEnd).toLocaleDateString()}
+                </p>
+              )}
+
+              <div className="mt-6 max-w-xs">
+                <UsageGauge refreshKey={gaugeKey} />
+              </div>
+
+              <div className="mt-8">
+                <PricingCards currentTier={subscription?.tier} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

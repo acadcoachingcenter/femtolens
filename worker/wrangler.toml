@@ -5,12 +5,10 @@ compatibility_date = "2024-09-01"
 [vars]
 CORS_ORIGIN = "*"
 AI_PROVIDER = "groq"
-# When you're ready to move to Anthropic, change the line above to:
-#   AI_PROVIDER = "anthropic"
-# and set the ANTHROPIC_API_KEY secret instead of GROQ_API_KEY — no code change needed.
-
-# API keys are secrets, never vars — set with one of:
-#   wrangler secret put GROQ_API_KEY
-#   wrangler secret put ANTHROPIC_API_KEY
-
+GOOGLE_CLIENT_ID = "63932542306-n27pfddhat5po84e8l0kuq2i7rama4no.apps.googleusercontent.com"
 account_id = "ab2ac3186ce21fac97dff24ea4ff13fe"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "femtolens-db"
+database_id = "cb071481-ed33-4075-a598-624b7dd046d9"

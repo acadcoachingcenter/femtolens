@@ -2,7 +2,7 @@ import LensMark, { Wordmark } from './LensMark.jsx'
 import {
   Plus, Clock, Bookmark, FileText, Newspaper, FlaskConical, BookOpenCheck,
   Database, Tags, Activity, Pill, Dna, Users, GitCompare, ShieldCheck,
-  Search as SearchIcon, Quote, FolderKanban, StickyNote, FileBox,
+  Search as SearchIcon, Quote, FolderKanban, StickyNote, FileBox, CreditCard,
 } from 'lucide-react'
 
 const SECTIONS = [
@@ -56,9 +56,15 @@ const SECTIONS = [
       { key: 'reports', label: 'Reports', icon: FileText },
     ],
   },
+  {
+    label: 'Account',
+    items: [
+      { key: 'plans', label: 'Plans & Usage', icon: CreditCard },
+    ],
+  },
 ]
 
-export default function Sidebar({ activeKey, onNavigate, onLogoClick }) {
+export default function Sidebar({ activeKey, onNavigate, onLogoClick, user, subscription, onSignOut }) {
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-ink-700/60 bg-ink-900/40 lg:flex">
       <button
@@ -97,7 +103,22 @@ export default function Sidebar({ activeKey, onNavigate, onLogoClick }) {
         ))}
       </nav>
       <div className="border-t border-ink-700/60 px-4 py-3">
-        <p className="text-[10px] leading-relaxed text-paper-50/35">
+        {user ? (
+          <button onClick={() => onNavigate('plans')} className="focus-ring flex w-full items-center gap-2.5 rounded-md px-1 py-1 text-left hover:bg-ink-800">
+            {user.picture ? (
+              <img src={user.picture} alt="" className="h-7 w-7 shrink-0 rounded-full" referrerPolicy="no-referrer" />
+            ) : (
+              <div className="h-7 w-7 shrink-0 rounded-full bg-ink-700" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium text-paper-50">{user.name || user.email}</p>
+              <p className="truncate text-[10px] text-lens-400/80">{subscription?.label || 'Trial'} plan</p>
+            </div>
+          </button>
+        ) : (
+          <p className="mb-2 text-[11px] text-paper-50/45">Sign in to run research</p>
+        )}
+        <p className="mt-2 text-[10px] leading-relaxed text-paper-50/35">
           Research intelligence, not clinical guidance.
         </p>
       </div>
