@@ -25,7 +25,16 @@ export default function LiveWorkspace({ question, type, depth, areas, token, onC
   }, [])
 
   async function run() {
+    let runId = null
     try {
+      // Record this run so it shows up in Active Research even if interrupted.
+      try {
+        const created = await api.createRun({ question, type, depth, plan: areas }, token)
+        runId = created.id
+      } catch {
+        // Non-fatal — research still works even if the run couldn't be recorded.
+      }
+
       // 1. Literature discovery
       setCurrentKey('search')
       pushLog('Searching biomedical literature', 'Querying PubMed and Europe PMC for relevant studies…')
@@ -41,6 +50,7 @@ export default function LiveWorkspace({ question, type, depth, areas, token, onC
 
       if (!searchRes.papers || searchRes.papers.length === 0) {
         setError('No relevant literature was found for this question. Try broadening it or lowering research depth.')
+        if (runId) api.updateRun(runId, { status: 'failed', error: 'No relevant literature found.' }, token).catch(() => {})
         return
       }
 
@@ -74,9 +84,11 @@ export default function LiveWorkspace({ question, type, depth, areas, token, onC
       await sleep(250)
       setDoneKeys((d) => [...d, 'report'])
 
-      onComplete({ papers: searchRes.papers, meta: searchRes.meta, synthesis: synth })
+      onComplete({ papers: searchRes.papers, meta: searchRes.meta, synthesis: synth, runId })
+      if (runId) api.updateRun(runId, { status: 'completed', papers: searchRes.papers, synthesis: synth }, token).catch(() => {})
     } catch (e) {
       setError(e.message || 'Something went wrong during research.')
+      if (runId) api.updateRun(runId, { status: 'failed', error: e.message || 'Unknown error' }, token).catch(() => {})
     }
   }
 

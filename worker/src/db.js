@@ -31,8 +31,6 @@ export async function getUserById(db, id) {
   return db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first()
 }
 
-// Returns the subscription row, rolling the period (and resetting runs_used)
-// if the current period has expired.
 export async function getActiveSubscription(db, userId) {
   let sub = await db.prepare('SELECT * FROM subscriptions WHERE user_id = ?').bind(userId).first()
   if (!sub) {
@@ -75,4 +73,54 @@ export async function recordGroqUsage(db, headers) {
 
 export async function getGroqUsage(db) {
   return db.prepare('SELECT * FROM groq_usage WHERE id = 1').first()
+}
+
+export async function createRun(db, { id, userId, question, type, depth, plan }) {
+  const now = nowIso()
+  await db.prepare(`
+    INSERT INTO research_runs (id, user_id, question, type, depth, status, plan_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)
+  `).bind(id, userId, question, type || null, depth || null, plan ? JSON.stringify(plan) : null, now, now).run()
+}
+
+export async function updateRun(db, id, userId, { status, papers, synthesis, error }) {
+  const now = nowIso()
+  await db.prepare(`
+    UPDATE research_runs SET
+      status = ?,
+      papers_json = COALESCE(?, papers_json),
+      synthesis_json = COALESCE(?, synthesis_json),
+      error = ?,
+      updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).bind(
+    status,
+    papers ? JSON.stringify(papers) : null,
+    synthesis ? JSON.stringify(synthesis) : null,
+    error || null,
+    now,
+    id,
+    userId
+  ).run()
+}
+
+export async function setRunSaved(db, id, userId, saved) {
+  await db.prepare('UPDATE research_runs SET saved = ? WHERE id = ? AND user_id = ?')
+    .bind(saved ? 1 : 0, id, userId).run()
+}
+
+export async function listRuns(db, userId, limit = 20) {
+  const { results } = await db.prepare(`
+    SELECT id, question, type, depth, status, saved, created_at, updated_at,
+           (papers_json IS NOT NULL) as has_papers
+    FROM research_runs
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).bind(userId, limit).all()
+  return results
+}
+
+export async function getRun(db, id, userId) {
+  return db.prepare('SELECT * FROM research_runs WHERE id = ? AND user_id = ?').bind(id, userId).first()
 }

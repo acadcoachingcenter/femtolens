@@ -1,3 +1,7 @@
+import { signSession, verifySession, bearerToken } from './auth.js'
+import { TIERS, depthAllowed, publicTierList } from './tiers.js'
+import { upsertGoogleUser, getUserById, getActiveSubscription, incrementRunUsage, recordGroqUsage, getGroqUsage, createRun, updateRun, listRuns, getRun, setRunSaved } from './db.js'
+
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
 
 // AI_PROVIDER: 'groq' (free tier, default) or 'anthropic' (set as a var in wrangler.toml
@@ -5,12 +9,19 @@ const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
 const GROQ_MODEL = 'openai/gpt-oss-120b'
 const ANTHROPIC_MODEL = 'claude-sonnet-5'
 
+class ApiError extends Error {
+  constructor(message, status = 400) {
+    super(message)
+    this.status = status
+  }
+}
+
 function cors(env) {
   const origin = env.CORS_ORIGIN || '*'
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   }
 }
 
@@ -22,7 +33,7 @@ function json(data, env, status = 200) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
     if (request.method === 'OPTIONS') {
@@ -31,33 +42,77 @@ export default {
 
     try {
       if (url.pathname === '/api/plan' && request.method === 'POST') {
-        return json(await handlePlan(await request.json(), env), env)
+        return json(await handlePlan(await request.json(), env, ctx), env)
       }
       if (url.pathname === '/api/search' && request.method === 'POST') {
-        return json(await handleSearch(await request.json(), env), env)
+        return json(await handleSearch(await request.json(), env, ctx, request), env)
       }
       if (url.pathname === '/api/synthesize' && request.method === 'POST') {
-        return json(await handleSynthesize(await request.json(), env), env)
+        return json(await handleSynthesize(await request.json(), env, ctx, request), env)
+      }
+      if (url.pathname === '/api/auth/google' && request.method === 'POST') {
+        return json(await handleGoogleAuth(await request.json(), env), env)
+      }
+      if (url.pathname === '/api/me' && request.method === 'GET') {
+        return json(await handleMe(request, env), env)
+      }
+      if (url.pathname === '/api/tiers' && request.method === 'GET') {
+        return json({ tiers: publicTierList() }, env)
+      }
+      if (url.pathname === '/api/usage' && request.method === 'GET') {
+        return json(await handleUsage(env), env)
+      }
+      if (url.pathname === '/api/research' && request.method === 'POST') {
+        return json(await handleCreateRun(await request.json(), env, request), env)
+      }
+      if (url.pathname === '/api/research' && request.method === 'GET') {
+        return json(await handleListRuns(request, env), env)
+      }
+      {
+        const runMatch = url.pathname.match(/^\/api\/research\/([^/]+)$/)
+        if (runMatch && request.method === 'GET') {
+          return json(await handleGetRun(runMatch[1], request, env), env)
+        }
+        if (runMatch && request.method === 'PATCH') {
+          return json(await handleUpdateRun(runMatch[1], await request.json(), request, env), env)
+        }
+        const saveMatch = url.pathname.match(/^\/api\/research\/([^/]+)\/save$/)
+        if (saveMatch && request.method === 'PATCH') {
+          return json(await handleSaveRun(saveMatch[1], await request.json(), request, env), env)
+        }
       }
       if (url.pathname === '/api/health') {
         return json({ ok: true, service: 'femtolens-worker' }, env)
       }
       return json({ error: 'Not found' }, env, 404)
     } catch (err) {
-      return json({ error: err.message || 'Internal error' }, env, 500)
+      const status = err instanceof ApiError ? err.status : 500
+      return json({ error: err.message || 'Internal error', code: err.code || undefined }, env, status)
     }
   },
 }
 
-// ---------- LLM helper (Groq by default, Anthropic as a drop-in swap later) ----------
+// ---------- Auth helpers ----------
 
-async function callLLM(env, { system, prompt, maxTokens = 1500, json: wantJson = true }) {
-  const provider = (env.AI_PROVIDER || 'groq').toLowerCase()
-  if (provider === 'anthropic') return callAnthropic(env, { system, prompt, maxTokens })
-  return callGroq(env, { system, prompt, maxTokens, wantJson })
+async function requireUser(request, env) {
+  const token = bearerToken(request)
+  if (!token) throw new ApiError('Sign in to run research.', 401)
+  const payload = await verifySession(token, env.SESSION_SECRET || 'dev-secret-change-me')
+  if (!payload) throw new ApiError('Your session has expired. Please sign in again.', 401)
+  const user = await getUserById(env.DB, payload.sub)
+  if (!user) throw new ApiError('Account not found. Please sign in again.', 401)
+  return user
 }
 
-async function callGroq(env, { system, prompt, maxTokens, wantJson }) {
+// ---------- LLM helper (Groq by default, Anthropic as a drop-in swap later) ----------
+
+async function callLLM(env, ctx, { system, prompt, maxTokens = 1500, json: wantJson = true }) {
+  const provider = (env.AI_PROVIDER || 'groq').toLowerCase()
+  if (provider === 'anthropic') return callAnthropic(env, { system, prompt, maxTokens })
+  return callGroq(env, ctx, { system, prompt, maxTokens, wantJson })
+}
+
+async function callGroq(env, ctx, { system, prompt, maxTokens, wantJson }) {
   if (!env.GROQ_API_KEY) {
     throw new Error('Server is missing GROQ_API_KEY. Set it with `wrangler secret put GROQ_API_KEY` (free key from console.groq.com).')
   }
@@ -75,12 +130,15 @@ async function callGroq(env, { system, prompt, maxTokens, wantJson }) {
         { role: 'system', content: system },
         { role: 'user', content: prompt },
       ],
-      // gpt-oss is a reasoning model; keep its reasoning trace out of the
-      // returned content so `content` is clean JSON, not chain-of-thought.
       reasoning_format: 'hidden',
       ...(wantJson ? { response_format: { type: 'json_object' } } : {}),
     }),
   })
+
+  if (env.DB && ctx) {
+    ctx.waitUntil(recordGroqUsage(env.DB, res.headers).catch(() => {}))
+  }
+
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`Groq API error (${res.status}): ${text.slice(0, 400)}`)
@@ -125,10 +183,144 @@ function extractJson(raw) {
   return JSON.parse(s.slice(start, end + 1))
 }
 
+// ---------- /api/auth/google ----------
+
+async function handleGoogleAuth({ idToken }, env) {
+  if (!idToken) throw new ApiError('Missing Google ID token.', 400)
+  if (!env.GOOGLE_CLIENT_ID) throw new ApiError('Server is missing GOOGLE_CLIENT_ID.', 500)
+
+  const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`)
+  if (!verifyRes.ok) throw new ApiError('Could not verify Google sign-in.', 401)
+  const payload = await verifyRes.json()
+
+  if (payload.aud !== env.GOOGLE_CLIENT_ID) throw new ApiError('Google sign-in was issued for a different app.', 401)
+  if (!payload.sub || !payload.email) throw new ApiError('Google sign-in response was incomplete.', 401)
+  if (payload.exp && Number(payload.exp) * 1000 < Date.now()) throw new ApiError('Google sign-in token expired, please try again.', 401)
+
+  const user = await upsertGoogleUser(env.DB, {
+    sub: payload.sub,
+    email: payload.email,
+    name: payload.name,
+    picture: payload.picture,
+  })
+  const sub = await getActiveSubscription(env.DB, user.id)
+
+  const sessionToken = await signSession(
+    { sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30 },
+    env.SESSION_SECRET || 'dev-secret-change-me'
+  )
+
+  return {
+    token: sessionToken,
+    user: { id: user.id, email: user.email, name: user.name, picture: user.picture },
+    subscription: subscriptionView(sub),
+  }
+}
+
+// ---------- /api/me ----------
+
+async function handleMe(request, env) {
+  const user = await requireUser(request, env)
+  const sub = await getActiveSubscription(env.DB, user.id)
+  return {
+    user: { id: user.id, email: user.email, name: user.name, picture: user.picture },
+    subscription: subscriptionView(sub),
+  }
+}
+
+function subscriptionView(sub) {
+  const tier = TIERS[sub.tier] || TIERS.trial
+  return {
+    tier: sub.tier,
+    label: tier.label,
+    runsUsed: sub.runs_used,
+    runsLimit: tier.runsPerPeriod,
+    maxDepth: tier.maxDepth,
+    periodEnd: sub.period_end,
+  }
+}
+
+// ---------- /api/usage (Groq free-tier gauge) ----------
+
+async function handleUsage(env) {
+  if (!env.DB) return { available: false }
+  const row = await getGroqUsage(env.DB)
+  if (!row || row.limit_requests === null) return { available: false }
+  return {
+    available: true,
+    requests: { limit: row.limit_requests, remaining: row.remaining_requests },
+    tokens: { limit: row.limit_tokens, remaining: row.remaining_tokens },
+    updatedAt: row.updated_at,
+  }
+}
+
+// ---------- /api/research (Active Research) ----------
+
+async function handleCreateRun(body, env, request) {
+  const user = await requireUser(request, env)
+  const { question, type, depth, plan } = body
+  if (!question || !question.trim()) throw new ApiError('A research question is required.', 400)
+  const id = crypto.randomUUID()
+  await createRun(env.DB, { id, userId: user.id, question, type, depth, plan })
+  return { id }
+}
+
+async function handleListRuns(request, env) {
+  const user = await requireUser(request, env)
+  const rows = await listRuns(env.DB, user.id, 30)
+  return {
+    runs: rows.map((r) => ({
+      id: r.id,
+      question: r.question,
+      type: r.type,
+      depth: r.depth,
+      status: r.status,
+      saved: !!r.saved,
+      hasReport: !!r.has_papers,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    })),
+  }
+}
+
+async function handleGetRun(id, request, env) {
+  const user = await requireUser(request, env)
+  const row = await getRun(env.DB, id, user.id)
+  if (!row) throw new ApiError('Research run not found.', 404)
+  return {
+    id: row.id,
+    question: row.question,
+    type: row.type,
+    depth: row.depth,
+    status: row.status,
+    error: row.error,
+    saved: !!row.saved,
+    plan: row.plan_json ? JSON.parse(row.plan_json) : null,
+    papers: row.papers_json ? JSON.parse(row.papers_json) : null,
+    synthesis: row.synthesis_json ? JSON.parse(row.synthesis_json) : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+async function handleUpdateRun(id, body, request, env) {
+  const user = await requireUser(request, env)
+  const { status, papers, synthesis, error } = body
+  if (!['running', 'completed', 'failed'].includes(status)) throw new ApiError('Invalid status.', 400)
+  await updateRun(env.DB, id, user.id, { status, papers, synthesis, error })
+  return { ok: true }
+}
+
+async function handleSaveRun(id, body, request, env) {
+  const user = await requireUser(request, env)
+  await setRunSaved(env.DB, id, user.id, !!body.saved)
+  return { ok: true }
+}
+
 // ---------- /api/plan ----------
 
-async function handlePlan({ question, type, depth }, env) {
-  if (!question || !question.trim()) throw new Error('A research question is required.')
+async function handlePlan({ question, type, depth }, env, ctx) {
+  if (!question || !question.trim()) throw new ApiError('A research question is required.', 400)
 
   const system = `You are the Research Planning Agent inside FEMTOLENS, a medical research intelligence platform.
 Given a medical/biomedical research question, produce a structured research plan.
@@ -148,16 +340,34 @@ Rules:
 Research type: ${type || 'General Medical Research'}
 Research depth: ${depth || 'standard'}`
 
-  const raw = await callLLM(env, { system, prompt, maxTokens: 1200 })
+  const raw = await callLLM(env, ctx, { system, prompt, maxTokens: 1200 })
   const plan = extractJson(raw)
   if (!plan.investigationAreas) plan.investigationAreas = []
   return plan
 }
 
-// ---------- /api/search (PubMed) ----------
+// ---------- /api/search (PubMed) — requires sign-in + tier gating ----------
 
-async function handleSearch({ question, type, areas, limit }, env) {
-  if (!question || !question.trim()) throw new Error('A research question is required.')
+async function handleSearch({ question, type, areas, depth, limit }, env, ctx, request) {
+  if (!question || !question.trim()) throw new ApiError('A research question is required.', 400)
+
+  const user = await requireUser(request, env)
+  const sub = await getActiveSubscription(env.DB, user.id)
+  const tier = TIERS[sub.tier] || TIERS.trial
+
+  if (!depthAllowed(sub.tier, depth || 'standard')) {
+    throw new ApiError(
+      `Your ${tier.label} plan supports up to "${tier.maxDepth}" depth. Upgrade for this depth.`,
+      403
+    )
+  }
+  if (sub.runs_used >= tier.runsPerPeriod) {
+    throw new ApiError(
+      `You've used all ${tier.runsPerPeriod} research runs on your ${tier.label} plan this period. Upgrade for more.`,
+      403
+    )
+  }
+
   const retmax = Math.min(Math.max(Number(limit) || 12, 3), 30)
 
   const term = buildPubMedTerm(question, areas)
@@ -199,6 +409,8 @@ async function handleSearch({ question, type, areas, limit }, env) {
     }
   }).filter(Boolean)
 
+  await incrementRunUsage(env.DB, user.id)
+
   return {
     papers,
     meta: {
@@ -206,13 +418,12 @@ async function handleSearch({ question, type, areas, limit }, env) {
       totalFound,
       included: papers.length,
       query: term,
+      quota: { tier: sub.tier, runsUsed: sub.runs_used + 1, runsLimit: tier.runsPerPeriod },
     },
   }
 }
 
 function buildPubMedTerm(question, areas) {
-  // Use the question directly; PubMed's automatic term mapping handles natural language reasonably well.
-  // Keep it concise to avoid over-constraining recall.
   return question
 }
 
@@ -265,10 +476,11 @@ function classifyStudy(pubtypes = []) {
   return 'other'
 }
 
-// ---------- /api/synthesize ----------
+// ---------- /api/synthesize — requires a signed-in session ----------
 
-async function handleSynthesize({ question, type, papers }, env) {
-  if (!papers || papers.length === 0) throw new Error('No papers provided to synthesize.')
+async function handleSynthesize({ question, type, papers }, env, ctx, request) {
+  await requireUser(request, env)
+  if (!papers || papers.length === 0) throw new ApiError('No papers provided to synthesize.', 400)
 
   const trimmed = papers.slice(0, 30).map((p) => ({
     pmid: p.pmid,
@@ -329,7 +541,7 @@ Research type: ${type || 'General Medical Research'}
 Supplied papers (JSON):
 ${JSON.stringify(trimmed, null, 2)}`
 
-  const raw = await callLLM(env, { system, prompt, maxTokens: 4000 })
+  const raw = await callLLM(env, ctx, { system, prompt, maxTokens: 4000 })
   const synthesis = extractJson(raw)
   return synthesis
 }

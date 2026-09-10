@@ -27,4 +27,9 @@ export const api = {
   me: (token) => request('/api/me', { token }),
   tiers: () => request('/api/tiers'),
   usage: () => request('/api/usage'),
+  createRun: (payload, token) => request('/api/research', { method: 'POST', body: payload, token }),
+  updateRun: (id, payload, token) => request(`/api/research/${id}`, { method: 'PATCH', body: payload, token }),
+  listRuns: (token) => request('/api/research', { token }),
+  getRun: (id, token) => request(`/api/research/${id}`, { token }),
+  saveRun: (id, saved, token) => request(`/api/research/${id}/save`, { method: 'PATCH', body: { saved }, token }),
 }

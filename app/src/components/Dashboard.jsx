@@ -9,6 +9,7 @@ import PlaceholderPanel from './PlaceholderPanel.jsx'
 import GoogleSignInButton from './GoogleSignInButton.jsx'
 import PricingCards from './PricingCards.jsx'
 import UsageGauge from './UsageGauge.jsx'
+import ActiveResearch from './ActiveResearch.jsx'
 import { Menu, ArrowLeft, LogOut } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { depthAllowed } from '../lib/tiers.js'
@@ -63,8 +64,6 @@ export default function Dashboard({ initialQuestion, onExit }) {
       setStage('signin-required')
       return
     }
-    // Refresh subscription in case it changed since sign-in, then gate client-side
-    // (server re-checks regardless — this just avoids a pointless round trip).
     await refresh(token)
     if (subscription && !depthAllowed(subscription.maxDepth, form.depth)) {
       setUpgradeReason(`Your ${subscription.label} plan supports up to "${subscription.maxDepth}" depth. Choose a lower depth or upgrade.`)
@@ -84,6 +83,12 @@ export default function Dashboard({ initialQuestion, onExit }) {
     setStage('report')
     setGaugeKey((k) => k + 1)
     refresh(token)
+  }
+
+  const handleOpenRun = (run) => {
+    setForm({ question: run.question, type: run.type, depth: run.depth })
+    setResult({ papers: run.papers || [], synthesis: run.synthesis || {} })
+    setStage('report')
   }
 
   return (
@@ -178,7 +183,11 @@ export default function Dashboard({ initialQuestion, onExit }) {
             />
           )}
 
-          {stage === 'placeholder' && navKey !== 'plans' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
+          {stage === 'placeholder' && navKey !== 'plans' && navKey !== 'active' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
+
+          {stage === 'placeholder' && navKey === 'active' && (
+            <ActiveResearch onOpenRun={handleOpenRun} onNew={goNew} />
+          )}
 
           {stage === 'placeholder' && navKey === 'plans' && (
             <div className="mx-auto max-w-3xl px-6 py-12">
@@ -230,7 +239,7 @@ export default function Dashboard({ initialQuestion, onExit }) {
 
 function labelFor(key) {
   const map = {
-    active: 'Active Research', history: 'Research History', saved: 'Saved Research',
+    history: 'Research History', saved: 'Saved Research',
     papers: 'Papers', journals: 'Journals', trials: 'Clinical Trials', guidelines: 'Guidelines', datasets: 'Datasets',
     topics: 'Topics', diseases: 'Disease Intelligence', drugs: 'Drug Intelligence', genes: 'Gene Research',
     biomarkers: 'Biomarker Research', researchers: 'Researchers',

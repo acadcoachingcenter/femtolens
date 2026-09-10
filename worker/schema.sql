@@ -30,3 +30,19 @@ CREATE TABLE IF NOT EXISTS groq_usage (
 );
 
 INSERT OR IGNORE INTO groq_usage (id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS research_runs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  question TEXT NOT NULL,
+  type TEXT,
+  depth TEXT,
+  status TEXT NOT NULL DEFAULT 'running',
+  error TEXT,
+  plan_json TEXT,
+  papers_json TEXT,
+  synthesis_json TEXT,
+  saved INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
