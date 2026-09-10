@@ -75,6 +75,8 @@ export async function getGroqUsage(db) {
   return db.prepare('SELECT * FROM groq_usage WHERE id = 1').first()
 }
 
+// ---------- Research runs (Active Research) ----------
+
 export async function createRun(db, { id, userId, question, type, depth, plan }) {
   const now = nowIso()
   await db.prepare(`
@@ -109,15 +111,25 @@ export async function setRunSaved(db, id, userId, saved) {
     .bind(saved ? 1 : 0, id, userId).run()
 }
 
-export async function listRuns(db, userId, limit = 20) {
-  const { results } = await db.prepare(`
+export async function listRuns(db, userId, { limit = 20, offset = 0, search = '', status = '' } = {}) {
+  let sql = `
     SELECT id, question, type, depth, status, saved, created_at, updated_at,
            (papers_json IS NOT NULL) as has_papers
     FROM research_runs
     WHERE user_id = ?
-    ORDER BY created_at DESC
-    LIMIT ?
-  `).bind(userId, limit).all()
+  `
+  const params = [userId]
+  if (search) {
+    sql += ' AND question LIKE ?'
+    params.push(`%${search}%`)
+  }
+  if (status) {
+    sql += ' AND status = ?'
+    params.push(status)
+  }
+  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  params.push(limit, offset)
+  const { results } = await db.prepare(sql).bind(...params).all()
   return results
 }
 

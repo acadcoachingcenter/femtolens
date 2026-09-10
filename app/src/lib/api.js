@@ -29,7 +29,10 @@ export const api = {
   usage: () => request('/api/usage'),
   createRun: (payload, token) => request('/api/research', { method: 'POST', body: payload, token }),
   updateRun: (id, payload, token) => request(`/api/research/${id}`, { method: 'PATCH', body: payload, token }),
-  listRuns: (token) => request('/api/research', { token }),
+  listRuns: (token, params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/api/research${qs ? `?${qs}` : ''}`, { token })
+  },
   getRun: (id, token) => request(`/api/research/${id}`, { token }),
   saveRun: (id, saved, token) => request(`/api/research/${id}/save`, { method: 'PATCH', body: { saved }, token }),
 }

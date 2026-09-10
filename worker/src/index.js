@@ -66,7 +66,7 @@ export default {
         return json(await handleCreateRun(await request.json(), env, request), env)
       }
       if (url.pathname === '/api/research' && request.method === 'GET') {
-        return json(await handleListRuns(request, env), env)
+        return json(await handleListRuns(request, env, url), env)
       }
       {
         const runMatch = url.pathname.match(/^\/api\/research\/([^/]+)$/)
@@ -265,11 +265,17 @@ async function handleCreateRun(body, env, request) {
   return { id }
 }
 
-async function handleListRuns(request, env) {
+async function handleListRuns(request, env, url) {
   const user = await requireUser(request, env)
-  const rows = await listRuns(env.DB, user.id, 30)
+  const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), 50)
+  const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0)
+  const search = url.searchParams.get('q') || ''
+  const status = url.searchParams.get('status') || ''
+  const rows = await listRuns(env.DB, user.id, { limit: limit + 1, offset, search, status })
+  const hasMore = rows.length > limit
+  const trimmed = rows.slice(0, limit)
   return {
-    runs: rows.map((r) => ({
+    runs: trimmed.map((r) => ({
       id: r.id,
       question: r.question,
       type: r.type,
@@ -280,6 +286,7 @@ async function handleListRuns(request, env) {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     })),
+    hasMore,
   }
 }
 
@@ -371,8 +378,8 @@ async function handleSearch({ question, type, areas, depth, limit }, env, ctx, r
   const retmax = Math.min(Math.max(Number(limit) || 12, 3), 30)
 
   const term = buildPubMedTerm(question, areas)
-  const esearchUrl = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&sort=relevance&retmax=${retmax}&term=${encodeURIComponent(term)}`
-  const esearchRes = await fetch(esearchUrl, { headers: { 'User-Agent': 'FEMTOLENS/1.0' } })
+  const esearchUrl = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&sort=relevance&retmax=${retmax}&term=${encodeURIComponent(term)}&${eutilsParams(env)}`
+  const esearchRes = await fetchWithRetry(esearchUrl)
   if (!esearchRes.ok) throw new Error(`PubMed search failed (${esearchRes.status})`)
   const esearchData = await esearchRes.json()
   const idList = esearchData.esearchresult?.idlist || []
@@ -384,10 +391,8 @@ async function handleSearch({ question, type, areas, depth, limit }, env, ctx, r
 
   const ids = idList.join(',')
 
-  const [summaryData, abstracts] = await Promise.all([
-    fetchEsummary(ids),
-    fetchAbstracts(ids),
-  ])
+  const summaryData = await fetchEsummary(ids, env)
+  const abstracts = await fetchAbstracts(ids, env)
 
   const papers = idList.map((pmid) => {
     const s = summaryData.result?.[pmid]
@@ -427,16 +432,36 @@ function buildPubMedTerm(question, areas) {
   return question
 }
 
-async function fetchEsummary(ids) {
-  const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${ids}`
-  const res = await fetch(url, { headers: { 'User-Agent': 'FEMTOLENS/1.0' } })
+function eutilsParams(env) {
+  const params = { tool: 'femtolens', email: 'hr.skylinepixelstudio@gmail.com' }
+  if (env.NCBI_API_KEY) params.api_key = env.NCBI_API_KEY
+  return new URLSearchParams(params).toString()
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function fetchWithRetry(url, retries = 3, baseDelayMs = 600) {
+  let lastRes
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    lastRes = await fetch(url, { headers: { 'User-Agent': 'FEMTOLENS/1.0 (hr.skylinepixelstudio@gmail.com)' } })
+    if (lastRes.status !== 429) return lastRes
+    if (attempt < retries) await sleep(baseDelayMs * (attempt + 1))
+  }
+  return lastRes
+}
+
+async function fetchEsummary(ids, env) {
+  const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${ids}&${eutilsParams(env)}`
+  const res = await fetchWithRetry(url)
   if (!res.ok) throw new Error(`PubMed summary failed (${res.status})`)
   return res.json()
 }
 
-async function fetchAbstracts(ids) {
-  const url = `${EUTILS}/efetch.fcgi?db=pubmed&rettype=abstract&retmode=xml&id=${ids}`
-  const res = await fetch(url, { headers: { 'User-Agent': 'FEMTOLENS/1.0' } })
+async function fetchAbstracts(ids, env) {
+  const url = `${EUTILS}/efetch.fcgi?db=pubmed&rettype=abstract&retmode=xml&id=${ids}&${eutilsParams(env)}`
+  const res = await fetchWithRetry(url)
   if (!res.ok) return {}
   const xml = await res.text()
   const map = {}

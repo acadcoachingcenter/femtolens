@@ -10,6 +10,7 @@ import GoogleSignInButton from './GoogleSignInButton.jsx'
 import PricingCards from './PricingCards.jsx'
 import UsageGauge from './UsageGauge.jsx'
 import ActiveResearch from './ActiveResearch.jsx'
+import ResearchHistory from './ResearchHistory.jsx'
 import { Menu, ArrowLeft, LogOut } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { depthAllowed } from '../lib/tiers.js'
@@ -18,7 +19,7 @@ import LensMark, { Wordmark } from './LensMark.jsx'
 
 export default function Dashboard({ initialQuestion, onExit }) {
   const { user, subscription, token, signOut, refresh } = useAuth()
-  const [stage, setStage] = useState('form') // form | planning | plan | signin-required | upgrade-required | workspace | report | placeholder
+  const [stage, setStage] = useState('form')
   const [navKey, setNavKey] = useState('new')
   const [form, setForm] = useState(null)
   const [plan, setPlan] = useState(null)
@@ -183,10 +184,14 @@ export default function Dashboard({ initialQuestion, onExit }) {
             />
           )}
 
-          {stage === 'placeholder' && navKey !== 'plans' && navKey !== 'active' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
+          {stage === 'placeholder' && navKey !== 'plans' && navKey !== 'active' && navKey !== 'history' && <PlaceholderPanel label={labelFor(navKey)} onNew={goNew} />}
 
           {stage === 'placeholder' && navKey === 'active' && (
             <ActiveResearch onOpenRun={handleOpenRun} onNew={goNew} />
+          )}
+
+          {stage === 'placeholder' && navKey === 'history' && (
+            <ResearchHistory onOpenRun={handleOpenRun} onNew={goNew} />
           )}
 
           {stage === 'placeholder' && navKey === 'plans' && (
@@ -239,7 +244,7 @@ export default function Dashboard({ initialQuestion, onExit }) {
 
 function labelFor(key) {
   const map = {
-    history: 'Research History', saved: 'Saved Research',
+    saved: 'Saved Research',
     papers: 'Papers', journals: 'Journals', trials: 'Clinical Trials', guidelines: 'Guidelines', datasets: 'Datasets',
     topics: 'Topics', diseases: 'Disease Intelligence', drugs: 'Drug Intelligence', genes: 'Gene Research',
     biomarkers: 'Biomarker Research', researchers: 'Researchers',
